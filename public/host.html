@@ -95,18 +95,20 @@ async function loadList(){
 }
 $('refresh').onclick=loadList;loadList();
 $('form').onsubmit=async e=>{
-  e.preventDefault(); $('go').disabled=true; $('out').innerHTML='';
+  e.preventDefault(); $('go').disabled=true; $('go').textContent='Sending...'; $('out').innerHTML='';
+  try{
   const body={title:$('title').value,start:zonedToUtc($('start').value,$('tz').value).toISOString(),durationMin:+$('dur').value,
     attendees:$('att').value.split(/[,;\s]+/).filter(Boolean),hostName:$('host').value,description:$('desc').value,
     tz:$('tz').value};
-  try{
-    const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!$('start').value) throw new Error('Pick a date and time.');
+    if(isNaN(new Date(body.start))) throw new Error('Invalid date or time.');
+    const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:(AbortSignal.timeout?AbortSignal.timeout(45000):undefined)});
     const d=await r.json(); if(!r.ok) throw new Error(d.error);
     let t=d.results.map(x=>(x.ok?'Sent to ':'Failed for ')+x.to+(x.error?': '+x.error:'')).join('\n');
     if(d.calendarLink) t+='\nAdded to Google Calendar';
     if(d.calendarError) t+='\nGoogle Calendar error: '+d.calendarError;
     $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent=t;
   }catch(err){ $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent='Error: '+err.message }
-  $('go').disabled=false;loadList();
+  $('go').disabled=false;$('go').textContent='Send invites';loadList();
 };
 </script></body></html>

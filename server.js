@@ -209,7 +209,7 @@ async function sendEmail({ to, subject, html, ics }) {
   const body = { from: FROM, to: [to], subject, html };
   if (ics) body.attachments = [{ filename: 'invite.ics', content: Buffer.from(ics).toString('base64') }];
   const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
+    method: 'POST', signal: AbortSignal.timeout(15000),
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -285,11 +285,11 @@ app.post('/api/schedule', auth, async (req, res) => {
     const ics = makeIcs({ title, start: startD, end: endD, joinUrl, description, uid: Date.now() + '-' + Math.random().toString(36).slice(2) });
     const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description });
 
-    const results = [];
-    for (const to of attendees) {
-      try { await sendEmail({ to, subject: `Invitation: ${title}`, html, ics }); results.push({ to, ok: true }); }
-      catch (e) { results.push({ to, ok: false, error: e.message }); }
-    }
+    const results = await Promise.all(attendees.map(to =>
+      sendEmail({ to, subject: `Invitation: ${title}`, html, ics })
+        .then(() => ({ to, ok: true }))
+        .catch(e => { console.error('Resend error', to, e.message); return { to, ok: false, error: e.message }; })
+    ));
     let calendarLink = null, calendarError = null, googleEventId = null;
     if (googleConnected()) {
       try {
