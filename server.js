@@ -165,7 +165,7 @@ function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostN
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nexada//Meet//EN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
     `UID:${uid}@nexada.co`, `DTSTAMP:${icsDate(new Date())}`, `DTSTART:${icsDate(start)}`, `DTEND:${icsDate(end)}`,
     `SUMMARY:${fold(title)}`, `DESCRIPTION:${fold((description ? description + '\n\n' : '') + 'Join: ' + joinUrl)}`,
-    `ORGANIZER;CN=${fold(hostName || 'Nexada')}:mailto:${org}`,
+    `ORGANIZER;CN=${fold(hostName || 'Angelo Castellana')}:mailto:${org}`,
     ...(attendee ? [`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendee}`] : []),
     'SEQUENCE:0', 'STATUS:CONFIRMED',
     `LOCATION:${fold(joinUrl)}`, `URL:${joinUrl}`, 'END:VEVENT', 'END:VCALENDAR'
@@ -238,7 +238,7 @@ app.get('/api/room', async (req, res) => {
     const url = room.url;
     const tk = await daily('/meeting-tokens', {
       method: 'POST',
-      body: JSON.stringify({ properties: { room_name: roomName, is_owner: !!link.o, exp: link.e + GRACE_AFTER_SEC, enable_prejoin_ui: true } })
+      body: JSON.stringify({ properties: { room_name: roomName, is_owner: !!link.o, ...(link.o ? { user_name: process.env.HOST_NAME || 'Angelo Castellana' } : {}), exp: link.e + GRACE_AFTER_SEC, enable_prejoin_ui: true } })
     });
     res.json({ url: `${url}?t=${tk.token}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -281,7 +281,7 @@ app.get('/api/status', auth, (req, res) => res.json({ google: googleConnected(),
 
 app.post('/api/schedule', auth, async (req, res) => {
   try {
-    const { title, start, durationMin = 30, attendees = [], description = '', hostName = 'Nexada', tz = 'UTC' } = req.body;
+    const { title, start, durationMin = 30, attendees = [], description = '', hostName = 'Angelo Castellana', tz = 'UTC' } = req.body;
     if (!title || !start || !attendees.length) return res.status(400).json({ error: 'Title, time and at least one email are required.' });
     const startD = new Date(start);
     const endD = new Date(startD.getTime() + durationMin * 60000);
