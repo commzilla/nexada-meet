@@ -18,7 +18,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const TOKEN_FILE = path.join(DATA_DIR, 'google-token.json');
 
 /* ---------- storage: Postgres (DATABASE_URL) or local files ---------- */
-const db = process.env.DATABASE_URL ? new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 3 }) : null;
+const db = process.env.DATABASE_URL ? new pg.Pool({ connectionString: process.env.DATABASE_URL.trim().replace(/([?&])channel_binding=[^&]*&?/, '$1').replace(/[?&]$/, ''), ssl: { rejectUnauthorized: false }, max: 3 }) : null;
 const kv = {};
 async function initStore() {
   if (db) {
