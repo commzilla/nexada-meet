@@ -54,8 +54,9 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 .features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}
 @media(max-width:720px){.features{grid-template-columns:1fr}.hero{padding:36px 0 24px}}
 .foot{text-align:center;color:#6f6688;font-size:13px;padding:0 20px calc(28px + env(safe-area-inset-bottom))}
-body.room{overflow:hidden}
-.roomwrap{height:100vh;height:100dvh;display:flex;flex-direction:column}
+body.room{overflow:hidden;position:fixed;inset:0;height:100%;width:100%}
+.roomwrap{position:fixed;inset:0;display:flex;flex-direction:column;height:100%}
 .roomwrap .topbar{position:relative}
-.roomwrap iframe{flex:1;border:0;width:100%;background:#0b0816}
+.roomwrap .topbar{flex:0 0 auto}
+.roomwrap iframe{flex:1 1 auto;min-height:0;height:100%;border:0;width:100%;display:block;background:#0b0816}
 .roomwrap .card{text-align:center}
