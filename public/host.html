@@ -130,7 +130,35 @@ async function loadList(){
       const jn=el('a','btn sm','Join as host');jn.href=m.hostUrl;
       if(status==='Ended'){box.appendChild(c);return}
       if(status!=='Scheduled')r.appendChild(jn);
-      r.appendChild(ad);r.appendChild(cp);if(!m.instant)r.appendChild(cn);c.appendChild(r);c.appendChild(addBox);box.appendChild(c);
+      // Reschedule panel
+      const rs=el('button','btn ghost sm','Reschedule');
+      const rsBox=el('div');rsBox.style.cssText='display:none;margin-top:12px';
+      const pad=n=>String(n).padStart(2,'0');
+      const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:m.tz||tzName,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(st).map(x=>[x.type,x.value]));
+      rsBox.innerHTML='<label>New date and time</label><input type="datetime-local" class="rsS"><div class="two"><div><label>Timezone</label><select class="rsT"></select></div><div><label>Duration (min)</label><select class="rsD"><option>15</option><option>30</option><option>45</option><option>60</option><option>90</option><option>120</option></select></div></div>';
+      const rsS=rsBox.querySelector('.rsS'),rsT=rsBox.querySelector('.rsT'),rsD=rsBox.querySelector('.rsD');
+      rsS.value=p.year+'-'+p.month+'-'+p.day+'T'+p.hour+':'+p.minute;
+      rsT.innerHTML=$('tz').innerHTML;rsT.value=m.tz||tzName;
+      const mins=String(Math.round((en-st)/60000));
+      if(![...rsD.options].some(o=>o.value===mins))rsD.insertAdjacentHTML('beforeend','<option>'+mins+'</option>');
+      rsD.value=mins;
+      const rsGo=el('button','btn sm','Save and notify guests');rsGo.style.marginTop='12px';
+      const rsRes=el('div');rsBox.appendChild(rsGo);rsBox.appendChild(rsRes);
+      rs.onclick=()=>{rsBox.style.display=rsBox.style.display==='none'?'block':'none';addBox.style.display='none'};
+      ad.addEventListener('click',()=>{rsBox.style.display='none'});
+      rsGo.onclick=async()=>{
+        rsGo.disabled=true;rsGo.textContent='Saving...';rsRes.innerHTML='';
+        try{
+          const x=await fetch('/api/meetings/'+encodeURIComponent(m.id)+'/reschedule',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({start:zonedToUtc(rsS.value,rsT.value).toISOString(),tz:rsT.value,durationMin:+rsD.value})});
+          const d=await x.json();if(!x.ok)throw new Error(d.error);
+          const bad=d.results.filter(z=>!z.ok);
+          if(bad.length){rsRes.appendChild(el('div','msg','Saved, but email failed for: '+bad.map(z=>z.to+' ('+z.error+')').join(', ')));setTimeout(loadList,6000)}
+          else{loadList();return}
+        }catch(e){rsRes.appendChild(el('div','msg','Error: '+e.message))}
+        rsGo.disabled=false;rsGo.textContent='Save and notify guests';
+      };
+      r.appendChild(ad);if(!m.instant)r.appendChild(rs);r.appendChild(cp);if(!m.instant)r.appendChild(cn);c.appendChild(r);c.appendChild(addBox);if(!m.instant)c.appendChild(rsBox);box.appendChild(c);
     });
   }catch(e){box.textContent='Could not load meetings.'}
 }

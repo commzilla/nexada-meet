@@ -188,7 +188,7 @@ function cancelHtml({ title, whenText, hostName }) {
 
 /* ---------- ICS + email ---------- */
 const icsDate = d => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostName, cancel = false }) {
+function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostName, cancel = false, sequence = 0 }) {
   const org = process.env.ORGANIZER_EMAIL || 'angelo@nexada.co';
   const fold = s => s.replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
   return [
@@ -197,12 +197,12 @@ function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostN
     `SUMMARY:${fold(title)}`, `DESCRIPTION:${fold((description ? description + '\n\n' : '') + 'Join: ' + joinUrl)}`,
     `ORGANIZER;CN=${fold(hostName || 'Angelo Castellana')}:mailto:${org}`,
     ...(attendee ? [`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendee}`] : []),
-    `SEQUENCE:${cancel ? 1 : 0}`, `STATUS:${cancel ? 'CANCELLED' : 'CONFIRMED'}`,
+    `SEQUENCE:${sequence}`, `STATUS:${cancel ? 'CANCELLED' : 'CONFIRMED'}`,
     `LOCATION:${fold(joinUrl)}`, `URL:${joinUrl}`, 'END:VEVENT', 'END:VCALENDAR'
   ].join('\r\n');
 }
 
-function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now }) {
+function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now, updated, oldWhenText }) {
   return `<!doctype html><html><body style="margin:0;padding:0;background:#07050d;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#07050d;padding:32px 12px;">
 <tr><td align="center">
@@ -210,9 +210,9 @@ function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, n
 <tr><td style="height:4px;background:linear-gradient(90deg,#7c4dff,#c084fc);font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:32px 36px 8px;"><img src="${APP_URL}/logo.png" width="44" alt="Nexada" style="display:block;border:0;"></td></tr>
 <tr><td style="padding:8px 36px 0;">
-  <p style="margin:0 0 6px;color:#a78bfa;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;">${now ? 'Join now' : "You're invited"}</p>
+  <p style="margin:0 0 6px;color:#a78bfa;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;">${now ? 'Join now' : updated ? 'Meeting rescheduled' : "You're invited"}</p>
   <h1 style="margin:0;color:#ffffff;font-size:26px;line-height:1.25;font-weight:700;">${esc(title)}</h1>
-  <p style="margin:12px 0 0;color:#b9b2cc;font-size:15px;line-height:1.6;">${esc(hostName)} invited you to a video meeting.</p>
+  <p style="margin:12px 0 0;color:#b9b2cc;font-size:15px;line-height:1.6;">${updated ? `${esc(hostName)} moved this meeting to a new time. Please use the new link below.` : `${esc(hostName)} invited you to a video meeting.`}</p>${updated && oldWhenText ? `<p style="margin:10px 0 0;color:#8f86a8;font-size:14px;"><s>${esc(oldWhenText)}</s></p>` : ''}
 </td></tr>
 <tr><td style="padding:24px 36px 0;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#17112a;border:1px solid #2a1f47;border-radius:14px;">
@@ -315,7 +315,7 @@ app.delete('/api/meetings/:id', auth, async (req, res) => {
     const html = cancelHtml({ title: m.title, whenText, hostName: m.hostName });
     const results = [];
     for (const to of m.attendees || []) {
-      try { await sendEmail({ to, subject: `Cancelled: ${m.title}`, html, ics: makeIcs({ title: m.title, start: new Date(m.start), end: new Date(m.end), joinUrl: m.joinUrl, description: m.description, uid: m.uid || m.id, attendee: to, hostName: m.hostName, cancel: true }) }); results.push({ to, ok: true }); }
+      try { await sendEmail({ to, subject: `Cancelled: ${m.title}`, html, ics: makeIcs({ title: m.title, start: new Date(m.start), end: new Date(m.end), joinUrl: m.joinUrl, description: m.description, uid: m.uid || m.id, attendee: to, hostName: m.hostName, cancel: true, sequence: (m.sequence || 0) + 1 }) }); results.push({ to, ok: true }); }
       catch (e) { results.push({ to, ok: false, error: e.message }); }
     }
     res.json({ ok: true, results });
@@ -324,17 +324,17 @@ app.delete('/api/meetings/:id', auth, async (req, res) => {
 
 app.get('/api/status', auth, (req, res) => res.json({ db: !!db, google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
 
-async function sendInvites({ title, startD, endD, description = '', hostName = 'Angelo Castellana', tz = 'UTC', uid, joinUrl, now = false }, attendees) {
+async function sendInvites({ title, startD, endD, description = '', hostName = 'Angelo Castellana', tz = 'UTC', uid, joinUrl, now = false, sequence = 0, updated = false, oldWhenText = '' }, attendees) {
   const mins = Math.round((endD - startD) / 60000);
   const whenText = now ? 'Happening now' : new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: tz }).format(startD)
     + ` (${tz.replace('_', ' ')}) · ${mins} min`;
   const gcalUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
     + `&text=${encodeURIComponent(title)}&dates=${icsDate(startD)}/${icsDate(endD)}`
     + `&details=${encodeURIComponent('Join video call: ' + joinUrl)}&location=${encodeURIComponent(joinUrl)}`;
-  const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now });
+  const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now, updated, oldWhenText });
   return Promise.all(attendees.map(to =>
-    sendEmail({ to, subject: now ? `Join now: ${title}` : `Invitation: ${title}`, html,
-      ics: now ? null : makeIcs({ title, start: startD, end: endD, joinUrl, description, uid, attendee: to, hostName }) })
+    sendEmail({ to, subject: now ? `Join now: ${title}` : updated ? `Rescheduled: ${title}` : `Invitation: ${title}`, html,
+      ics: now ? null : makeIcs({ title, start: startD, end: endD, joinUrl, description, uid, attendee: to, hostName, sequence }) })
       .then(() => ({ to, ok: true }))
       .catch(e => { console.error('Resend error', to, e.message); return { to, ok: false, error: e.message }; })
   ));
@@ -375,7 +375,7 @@ app.post('/api/meetings/:id/guests', auth, async (req, res) => {
     if (!m) return res.status(404).json({ error: 'Meeting not found' });
     const emails = cleanEmails(req.body.emails).filter(e => !(m.attendees || []).includes(e));
     if (!emails.length) return res.status(400).json({ error: 'Enter at least one new valid email.' });
-    const results = await sendInvites({ title: m.title, startD: new Date(m.start), endD: new Date(m.end), description: m.description, hostName: m.hostName || 'Angelo Castellana', tz: m.tz || 'UTC', uid: m.uid || m.id, joinUrl: m.joinUrl }, emails);
+    const results = await sendInvites({ title: m.title, startD: new Date(m.start), endD: new Date(m.end), description: m.description, hostName: m.hostName || 'Angelo Castellana', tz: m.tz || 'UTC', uid: m.uid || m.id, joinUrl: m.joinUrl, sequence: m.sequence || 0 }, emails);
     const all = [...(m.attendees || []), ...emails];
     if (m.googleEventId && googleConnected()) {
       try {
@@ -388,6 +388,41 @@ app.post('/api/meetings/:id/guests', auth, async (req, res) => {
     if (local) local.attendees = all; else saved.push({ ...m, attendees: all });
     writeMeetings(saved.slice(-2000));
     res.json({ results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Reschedule: new time, new link, everyone gets an updated invite
+app.post('/api/meetings/:id/reschedule', auth, async (req, res) => {
+  try {
+    const { list } = await allMeetings();
+    const m = list.find(x => x.id === req.params.id);
+    if (!m) return res.status(404).json({ error: 'Meeting not found' });
+    const tz = req.body.tz || m.tz || 'UTC';
+    const startD = new Date(req.body.start);
+    if (isNaN(startD)) return res.status(400).json({ error: 'Invalid date.' });
+    if (startD.getTime() < Date.now() - 10 * 60000) return res.status(400).json({ error: 'That time is in the past.' });
+    const oldMins = Math.round((new Date(m.end) - new Date(m.start)) / 60000);
+    const mins = Math.min(Math.max(+req.body.durationMin || oldMins || 30, 5), 480);
+    const endD = new Date(startD.getTime() + mins * 60000);
+    const joinUrl = makeLink(startD.getTime(), endD.getTime(), 0);
+    const sequence = (m.sequence || 0) + 1;
+    const oldTz = m.tz || 'UTC';
+    const oldWhenText = 'Was: ' + new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: oldTz }).format(new Date(m.start)) + ` (${oldTz.replace('_', ' ')})`;
+    const results = await sendInvites({ title: m.title, startD, endD, description: m.description, hostName: m.hostName || 'Angelo Castellana', tz, uid: m.uid || m.id, joinUrl, sequence, updated: true, oldWhenText }, m.attendees || []);
+    if (m.googleEventId && googleConnected()) {
+      try {
+        const c = oauth(); c.setCredentials(googleTokens());
+        await google.calendar({ version: 'v3', auth: c }).events.patch({ calendarId: 'primary', eventId: m.googleEventId, sendUpdates: 'none', requestBody: {
+          start: { dateTime: startD.toISOString() }, end: { dateTime: endD.toISOString() }, location: joinUrl,
+          description: `${m.description ? m.description + '\n\n' : ''}Join video call: ${joinUrl}` } });
+      } catch (e) { console.error('Google patch', e.message); }
+    }
+    const saved = readMeetings();
+    const upd = { start: startD.toISOString(), end: endD.toISOString(), tz, joinUrl, sequence, uid: m.uid || m.id };
+    const local = saved.find(x => x.id === m.id || (m.googleEventId && x.googleEventId === m.googleEventId));
+    if (local) Object.assign(local, upd); else { const { hostUrl, ...rest } = m; saved.push({ ...rest, ...upd }); }
+    writeMeetings(saved.slice(-2000));
+    res.json({ results, joinUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
