@@ -62,8 +62,9 @@ function zonedToUtc(str,tz){
   return new Date(ms);
 }
 $('startNow').onclick=async()=>{const d=await (await fetch('/api/instant?tz='+encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone))).json();location.href=d.hostUrl};
-$('copy').onclick=async()=>{const d=await (await fetch('/api/instant')).json();try{await navigator.clipboard.writeText(d.guestUrl);$('copy').textContent='Copied'}catch(e){prompt('Copy this link',d.guestUrl)}};
+$('copy').onclick=async()=>{const d=await (await fetch('/api/instant?tz='+encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone))).json();try{await navigator.clipboard.writeText(d.guestUrl);$('copy').textContent='Copied'}catch(e){prompt('Copy this link',d.guestUrl)}};
 fetch('/api/status').then(r=>r.json()).then(s=>{
+  if(!s.db) $('list').insertAdjacentHTML('beforebegin','<p class="sub hint" style="color:#fbbf24">History is not saved permanently yet: add DATABASE_URL in Render.</p>');
   $('gstat').textContent='Google Calendar: '+(s.google?'connected':'not connected');
   $('gstat').className='pill'+(s.google?' ok':'');
   if(!s.google) $('gbox').innerHTML=s.googleConfigured?'<a class="btn ghost sm" href="/auth/google" style="margin-top:18px">Connect Google Calendar</a>':'<p class="sub hint">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google Calendar sync. Emails still include an Add to Calendar link.</p>';

@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
+import pg from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -15,6 +16,35 @@ const APP_URL = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$
 const FROM = process.env.EMAIL_FROM || 'Nexada Meet <meet@nexada.co>';
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const TOKEN_FILE = path.join(DATA_DIR, 'google-token.json');
+
+/* ---------- storage: Postgres (DATABASE_URL) or local files ---------- */
+const db = process.env.DATABASE_URL ? new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 3 }) : null;
+const kv = {};
+async function initStore() {
+  if (db) {
+    await db.query('CREATE TABLE IF NOT EXISTS kv (key text PRIMARY KEY, value jsonb NOT NULL, updated_at timestamptz DEFAULT now())');
+    const r = await db.query('SELECT key, value FROM kv');
+    r.rows.forEach(row => { kv[row.key] = row.value; });
+    console.log('Storage: Postgres');
+  } else {
+    for (const k of ['meetings', 'google']) {
+      try { kv[k] = JSON.parse(fs.readFileSync(path.join(DATA_DIR, k + '.json'), 'utf8')); } catch {}
+    }
+    if (!kv.google) { try { kv.google = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8')); } catch {} }
+    console.log('Storage: local files (wiped on redeploy; set DATABASE_URL to keep data)');
+  }
+}
+let writeChain = Promise.resolve();
+function kvSet(key, value) {
+  kv[key] = value;
+  writeChain = writeChain.then(async () => {
+    try {
+      if (db) await db.query('INSERT INTO kv (key, value, updated_at) VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()', [key, JSON.stringify(value)]);
+      else fs.writeFileSync(path.join(DATA_DIR, key + '.json'), JSON.stringify(value));
+    } catch (e) { console.error('Storage write failed', key, e.message); }
+  });
+  return writeChain;
+}
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const esc = (s = '') => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -69,8 +99,8 @@ async function getRoomUrl() {
 const oauth = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, `${APP_URL}/auth/google/callback`
 );
-const googleConnected = () => !!process.env.GOOGLE_REFRESH_TOKEN || fs.existsSync(TOKEN_FILE);
-const googleTokens = () => process.env.GOOGLE_REFRESH_TOKEN ? { refresh_token: process.env.GOOGLE_REFRESH_TOKEN } : JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+const googleConnected = () => !!(process.env.GOOGLE_REFRESH_TOKEN || kv.google?.refresh_token);
+const googleTokens = () => process.env.GOOGLE_REFRESH_TOKEN ? { refresh_token: process.env.GOOGLE_REFRESH_TOKEN } : kv.google;
 
 app.get('/auth/google', auth, (req, res) => {
   const url = oauth().generateAuthUrl({
@@ -83,10 +113,10 @@ app.get('/auth/google/callback', auth, async (req, res) => {
   try {
     const c = oauth();
     const { tokens } = await c.getToken(req.query.code);
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens));
+    if (tokens.refresh_token) await kvSet('google', tokens);
     res.send(`<body style="background:#07050d;color:#fff;font-family:sans-serif;padding:30px;max-width:640px;margin:auto"><h2>Google Calendar connected</h2>
-<p>To keep it connected after restarts on free hosting, add this environment variable in Render, then redeploy:</p>
-<p><b>GOOGLE_REFRESH_TOKEN</b></p><textarea readonly style="width:100%;height:90px;background:#17112a;color:#fff;border:1px solid #2a1f47;padding:10px">${tokens.refresh_token || 'No refresh token returned. Remove the app at myaccount.google.com/permissions and connect again.'}</textarea>
+${db ? '<p>Saved to the database. You are all set.</p><!--' : ''}<p>To keep it connected after restarts on free hosting, add this environment variable in Render, then redeploy:</p>
+<p><b>GOOGLE_REFRESH_TOKEN</b></p><textarea readonly style="width:100%;height:90px;background:#17112a;color:#fff;border:1px solid #2a1f47;padding:10px">${tokens.refresh_token || 'No refresh token returned. Remove the app at myaccount.google.com/permissions and connect again.'}</textarea>${db ? '-->' : ''}
 <p><a style="color:#c4b5fd" href="/host">Back to dashboard</a></p></body>`);
   } catch (e) { res.status(500).send('Google error: ' + e.message); }
 });
@@ -113,8 +143,8 @@ async function addToGoogle({ title, start, end, attendees, joinUrl, description,
 
 /* ---------- meeting store (file) + Google merge ---------- */
 const MEET_FILE = path.join(DATA_DIR, 'meetings.json');
-const readMeetings = () => { try { return JSON.parse(fs.readFileSync(MEET_FILE, 'utf8')); } catch { return []; } };
-const writeMeetings = list => fs.writeFileSync(MEET_FILE, JSON.stringify(list, null, 1));
+const readMeetings = () => structuredClone(kv.meetings || []);
+const writeMeetings = list => kvSet('meetings', list);
 
 async function listGoogleMeetings() {
   const c = oauth();
@@ -158,16 +188,16 @@ function cancelHtml({ title, whenText, hostName }) {
 
 /* ---------- ICS + email ---------- */
 const icsDate = d => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostName }) {
+function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostName, cancel = false }) {
   const org = process.env.ORGANIZER_EMAIL || 'angelo@nexada.co';
   const fold = s => s.replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
   return [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nexada//Meet//EN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nexada//Meet//EN', `METHOD:${cancel ? 'CANCEL' : 'REQUEST'}`, 'BEGIN:VEVENT',
     `UID:${uid}@nexada.co`, `DTSTAMP:${icsDate(new Date())}`, `DTSTART:${icsDate(start)}`, `DTEND:${icsDate(end)}`,
     `SUMMARY:${fold(title)}`, `DESCRIPTION:${fold((description ? description + '\n\n' : '') + 'Join: ' + joinUrl)}`,
     `ORGANIZER;CN=${fold(hostName || 'Angelo Castellana')}:mailto:${org}`,
     ...(attendee ? [`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendee}`] : []),
-    'SEQUENCE:0', 'STATUS:CONFIRMED',
+    `SEQUENCE:${cancel ? 1 : 0}`, `STATUS:${cancel ? 'CANCELLED' : 'CONFIRMED'}`,
     `LOCATION:${fold(joinUrl)}`, `URL:${joinUrl}`, 'END:VEVENT', 'END:VCALENDAR'
   ].join('\r\n');
 }
@@ -211,7 +241,7 @@ ${now ? '' : `<tr><td align="center" style="padding:10px 36px 0;"><p style="marg
 
 async function sendEmail({ to, subject, html, ics }) {
   const body = { from: FROM, to: [to], subject, html, reply_to: process.env.ORGANIZER_EMAIL || 'angelo@nexada.co' };
-  if (ics) body.attachments = [{ filename: 'invite.ics', content: Buffer.from(ics).toString('base64'), content_type: 'text/calendar; method=REQUEST; charset=UTF-8' }];
+  if (ics) body.attachments = [{ filename: 'invite.ics', content: Buffer.from(ics).toString('base64'), content_type: `text/calendar; method=${ics.includes('METHOD:CANCEL') ? 'CANCEL' : 'REQUEST'}; charset=UTF-8` }];
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST', signal: AbortSignal.timeout(15000),
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -285,14 +315,14 @@ app.delete('/api/meetings/:id', auth, async (req, res) => {
     const html = cancelHtml({ title: m.title, whenText, hostName: m.hostName });
     const results = [];
     for (const to of m.attendees || []) {
-      try { await sendEmail({ to, subject: `Cancelled: ${m.title}`, html }); results.push({ to, ok: true }); }
+      try { await sendEmail({ to, subject: `Cancelled: ${m.title}`, html, ics: makeIcs({ title: m.title, start: new Date(m.start), end: new Date(m.end), joinUrl: m.joinUrl, description: m.description, uid: m.uid || m.id, attendee: to, hostName: m.hostName, cancel: true }) }); results.push({ to, ok: true }); }
       catch (e) { results.push({ to, ok: false, error: e.message }); }
     }
     res.json({ ok: true, results });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/status', auth, (req, res) => res.json({ google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
+app.get('/api/status', auth, (req, res) => res.json({ db: !!db, google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
 
 async function sendInvites({ title, startD, endD, description = '', hostName = 'Angelo Castellana', tz = 'UTC', uid, joinUrl, now = false }, attendees) {
   const mins = Math.round((endD - startD) / 60000);
@@ -317,7 +347,9 @@ app.post('/api/schedule', auth, async (req, res) => {
     const attendees = cleanEmails(req.body.attendees);
     if (!title || !start || !attendees.length) return res.status(400).json({ error: 'Title, time and at least one valid email are required.' });
     const startD = new Date(start);
-    const endD = new Date(startD.getTime() + durationMin * 60000);
+    if (isNaN(startD)) return res.status(400).json({ error: 'Invalid date.' });
+    if (startD.getTime() < Date.now() - 10 * 60000) return res.status(400).json({ error: 'That time is in the past.' });
+    const endD = new Date(startD.getTime() + Math.min(Math.max(+durationMin || 30, 5), 480) * 60000);
     const joinUrl = makeLink(startD.getTime(), endD.getTime(), 0);
     const uid = Date.now() + '-' + Math.random().toString(36).slice(2);
     const results = await sendInvites({ title, startD, endD, description, hostName, tz, uid, joinUrl }, attendees);
@@ -382,4 +414,5 @@ app.get(['/', '/index.html'], (req, res) => res.status(404).type('html').send('<
 app.get('/robots.txt', (req, res) => res.type('text').send('User-agent: *\nDisallow: /'));
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
-app.listen(PORT, () => console.log(`Nexada Meet running on ${APP_URL}`));
+initStore().catch(e => { console.error('Storage init failed:', e.message); process.exit(1); })
+  .then(() => app.listen(PORT, () => console.log(`Nexada Meet running on ${APP_URL}`)));
