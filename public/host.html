@@ -4,8 +4,8 @@
 <nav><div class="brand"><img src="/logo.png" alt=""> Nexada Meet</div><span id="gstat" class="pill">Google Calendar: checking...</span></nav>
 <div class="grid">
  <div class="card">
-  <h2>Start now</h2><p class="sub">Open the room instantly and share the link.</p>
-  <div class="row"><a class="btn" href="/room" target="_blank">Start meeting</a><button class="btn ghost" id="copy">Copy link</button></div>
+  <h2>Start now</h2><p class="sub">Opens the room right now. Share the guest link with anyone you want to join (valid 4 hours).</p>
+  <div class="row"><button class="btn" id="start">Start meeting</button><button class="btn ghost" id="copy">Copy guest link</button></div>
   <div id="gbox" style="margin-top:22px"></div>
  </div>
  <form class="card" id="form">
@@ -42,7 +42,8 @@ function zonedToUtc(str,tz){
   ms=guess-offsetMs(ms,tz);
   return new Date(ms);
 }
-$('copy').onclick=()=>{navigator.clipboard.writeText(location.origin+'/room');$('copy').textContent='Copied'};
+$('start').onclick=async()=>{const d=await (await fetch('/api/instant')).json();location.href=d.hostUrl};
+$('copy').onclick=async()=>{const d=await (await fetch('/api/instant')).json();try{await navigator.clipboard.writeText(d.guestUrl);$('copy').textContent='Copied'}catch(e){prompt('Copy this link',d.guestUrl)}};
 fetch('/api/status').then(r=>r.json()).then(s=>{
   $('gstat').textContent='Google Calendar: '+(s.google?'connected':'not connected');
   $('gstat').className='pill'+(s.google?' ok':'');

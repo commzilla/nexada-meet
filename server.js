@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
@@ -17,6 +18,23 @@ const TOKEN_FILE = path.join(DATA_DIR, 'google-token.json');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const esc = (s = '') => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------- signed meeting links ---------- */
+const SECRET = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || 'dev-secret';
+const OPEN_BEFORE_SEC = 30 * 60; // guests can join 30 min before start
+const GRACE_AFTER_SEC = 60 * 60; // link stays valid 1h after end
+const sign = (s, e, o) => crypto.createHmac('sha256', SECRET).update(`${s}.${e}.${o}`).digest('hex').slice(0, 32);
+const makeLink = (startMs, endMs, owner = 0) => {
+  const s = Math.floor(startMs / 1000), e = Math.floor(endMs / 1000);
+  return `${APP_URL}/room?s=${s}&e=${e}&o=${owner}&sig=${sign(s, e, owner)}`;
+};
+function verifyLink(q) {
+  const s = parseInt(q.s), e = parseInt(q.e), o = q.o === '1' ? 1 : 0;
+  if (!s || !e || !q.sig) return null;
+  const good = Buffer.from(sign(s, e, o)), got = Buffer.from(String(q.sig));
+  if (good.length !== got.length || !crypto.timingSafeEqual(good, got)) return null;
+  return { s, e, o };
+}
 
 /* ---------- auth for host area ---------- */
 function auth(req, res, next) {
@@ -128,6 +146,7 @@ function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description })
 <tr><td align="center" style="padding:28px 36px 8px;">
   <a href="${joinUrl}" style="display:inline-block;background:linear-gradient(135deg,#7c4dff,#a855f7);background-color:#7c4dff;color:#fff;text-decoration:none;font-weight:700;font-size:16px;padding:15px 38px;border-radius:12px;">Join meeting</a>
 </td></tr>
+<tr><td align="center" style="padding:10px 36px 0;"><p style="margin:0;color:#8f86a8;font-size:13px;">The room opens 30 minutes before the start time.</p></td></tr>
 <tr><td align="center" style="padding:8px 36px 0;">
   <a href="${gcalUrl}" style="color:#a78bfa;font-size:14px;text-decoration:none;">+ Add to Google Calendar</a>
 </td></tr>
@@ -154,16 +173,26 @@ async function sendEmail({ to, subject, html, ics }) {
 /* ---------- API ---------- */
 app.get('/api/room', async (req, res) => {
   try {
+    const link = verifyLink(req.query);
+    if (!link) return res.status(403).json({ error: 'invalid', message: 'Please use the link from your invitation.' });
+    const now = Math.floor(Date.now() / 1000);
+    const opensAt = link.s - OPEN_BEFORE_SEC;
+    if (now < opensAt) return res.status(425).json({ error: 'early', opensAt: opensAt * 1000, start: link.s * 1000 });
+    if (now > link.e + GRACE_AFTER_SEC) return res.status(410).json({ error: 'ended', message: 'This meeting has ended.' });
     const url = await getRoomUrl();
-    // A meeting token lets people in even when the Daily room is private
     const roomName = new URL(url).pathname.replace(/^\//, '');
     const tk = await daily('/meeting-tokens', {
       method: 'POST',
-      body: JSON.stringify({ properties: { room_name: roomName, exp: Math.floor(Date.now() / 1000) + 6 * 3600 } })
+      body: JSON.stringify({ properties: { room_name: roomName, is_owner: !!link.o, exp: link.e + GRACE_AFTER_SEC } })
     });
     res.json({ url: `${url}?t=${tk.token}` });
-  }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Instant meeting for the host: owner link + guest link, valid 4 hours
+app.get('/api/instant', auth, (req, res) => {
+  const now = Date.now(), end = now + 4 * 3600 * 1000;
+  res.json({ hostUrl: makeLink(now, end, 1), guestUrl: makeLink(now, end, 0) });
 });
 
 app.get('/api/status', auth, (req, res) => res.json({ google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
@@ -174,7 +203,7 @@ app.post('/api/schedule', auth, async (req, res) => {
     if (!title || !start || !attendees.length) return res.status(400).json({ error: 'Title, time and at least one email are required.' });
     const startD = new Date(start);
     const endD = new Date(startD.getTime() + durationMin * 60000);
-    const joinUrl = `${APP_URL}/room`;
+    const joinUrl = makeLink(startD.getTime(), endD.getTime(), 0);
     const whenText = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: tz }).format(startD)
       + ` (${tz.replace('_', ' ')}) · ${durationMin} min`;
     const gcalUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'

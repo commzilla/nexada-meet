@@ -5,8 +5,23 @@
 <iframe id="f" allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write" title="Meeting"></iframe>
 </div>
 <script>
-fetch('/api/room').then(r=>r.json()).then(d=>{
-  if(d.url) document.getElementById('f').src=d.url;
-  else document.body.insertAdjacentHTML('beforeend','<p style="padding:20px">Room unavailable: '+(d.error||'')+'</p>');
-});
+const f=document.getElementById('f');
+function msg(html){document.querySelector('.roomwrap').insertAdjacentHTML('beforeend','<div id="m" style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px"><div class="card" style="max-width:420px">'+html+'</div></div>');f.style.display='none'}
+function clear(){const m=document.getElementById('m');if(m)m.remove()}
+async function load(){
+  const r=await fetch('/api/room'+location.search);
+  const d=await r.json().catch(()=>({}));
+  if(r.ok&&d.url){clear();f.style.display='';f.src=d.url;return}
+  clear();
+  if(r.status===425){
+    const t=new Date(d.opensAt),st=new Date(d.start);
+    const fmt=x=>x.toLocaleString([], {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    msg('<h2>Meeting not open yet</h2><p class="sub">The meeting starts '+fmt(st)+'.<br>The room opens at '+fmt(t)+' (30 minutes before). This page will join automatically.</p><p class="sub" id="cd"></p>');
+    const tick=()=>{const s=Math.max(0,Math.round((d.opensAt-Date.now())/1000));
+      const el=document.getElementById('cd'); if(el) el.textContent='Opens in '+(s>=3600?Math.floor(s/3600)+'h ':'')+Math.floor(s%3600/60)+'m '+(s%60)+'s';
+      if(s<=0){clearInterval(iv);load()}};
+    tick();var iv=setInterval(tick,1000);
+  } else msg('<h2>'+(r.status===410?'Meeting ended':'Cannot join')+'</h2><p class="sub">'+(d.message||d.error||'Please use the link from your invitation.')+'</p>');
+}
+load();
 </script></body></html>
