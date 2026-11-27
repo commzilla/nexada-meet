@@ -103,7 +103,24 @@ async function loadList(){
         if(!x.ok){cn.textContent='Failed';cn.disabled=false;return}
         loadList();
       };
-      r.appendChild(cp);r.appendChild(cn);c.appendChild(r);box.appendChild(c);
+      const ad=el('button','btn sm','Add guests');
+      const addBox=el('div');addBox.style.cssText='display:none;margin-top:12px';
+      const inp=el('input');inp.placeholder='new@guest.com, other@guest.com';inp.setAttribute('inputmode','email');inp.setAttribute('autocapitalize','off');
+      const sendB=el('button','btn sm','Send invite');sendB.style.marginTop='10px';
+      const res=el('div');
+      addBox.appendChild(inp);addBox.appendChild(sendB);addBox.appendChild(res);
+      ad.onclick=()=>{addBox.style.display=addBox.style.display==='none'?'block':'none';inp.focus()};
+      sendB.onclick=async()=>{
+        sendB.disabled=true;sendB.textContent='Sending...';res.innerHTML='';
+        try{
+          const x=await fetch('/api/meetings/'+encodeURIComponent(m.id)+'/guests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emails:inp.value})});
+          const d=await x.json();if(!x.ok)throw new Error(d.error);
+          const bad=d.results.filter(z=>!z.ok);
+          if(bad.length){res.appendChild(el('div','msg',bad.map(z=>'Failed for '+z.to+': '+z.error).join('\n')))}else{loadList();return}
+        }catch(e){res.appendChild(el('div','msg','Error: '+e.message))}
+        sendB.disabled=false;sendB.textContent='Send invite';
+      };
+      r.appendChild(ad);r.appendChild(cp);r.appendChild(cn);c.appendChild(r);c.appendChild(addBox);box.appendChild(c);
     });
   }catch(e){box.textContent='Could not load meetings.'}
 }

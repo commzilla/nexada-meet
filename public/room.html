@@ -29,10 +29,31 @@ async function load(){
 load();
 if(new URLSearchParams(location.search).get('o')==='1'){
   const b=document.getElementById('invite');b.style.display='';
-  b.onclick=async()=>{
+  document.body.insertAdjacentHTML('beforeend',`<div id="inv" class="modal" style="display:none"><div class="card">
+    <div class="row between" style="margin:0 0 4px"><h2 style="margin:0">Invite people</h2><button class="btn ghost sm" id="invX">Close</button></div>
+    <p class="sub">They get an email with the link to join this call now.</p>
+    <label for="invE">Emails</label><input id="invE" inputmode="email" autocapitalize="off" placeholder="john@company.com, anna@company.com">
+    <button class="btn block" id="invS">Send invite</button>
+    <button class="btn ghost block" id="invC" style="margin-top:10px">Copy or share link instead</button>
+    <div id="invR"></div></div></div>`);
+  const $=id=>document.getElementById(id);
+  const show=v=>{$('inv').style.display=v?'flex':'none'};
+  b.onclick=()=>{show(true);$('invR').innerHTML='';$('invE').focus()};
+  $('invX').onclick=()=>show(false);
+  $('invS').onclick=async()=>{
+    const s=$('invS');s.disabled=true;s.textContent='Sending...';
+    try{
+      const x=await fetch('/api/invite'+location.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emails:$('invE').value})});
+      const d=await x.json();if(!x.ok)throw new Error(d.error);
+      $('invR').innerHTML='<div class="msg"></div>';$('invR').firstChild.textContent=d.results.map(z=>(z.ok?'Sent to ':'Failed for ')+z.to+(z.error?': '+z.error:'')).join('\n');
+      if(d.results.every(z=>z.ok))$('invE').value='';
+    }catch(e){$('invR').innerHTML='<div class="msg"></div>';$('invR').firstChild.textContent='Error: '+e.message}
+    s.disabled=false;s.textContent='Send invite';
+  };
+  $('invC').onclick=async()=>{
     const d=await (await fetch('/api/guest-link'+location.search)).json();
     if(navigator.share){try{await navigator.share({title:'Join my Nexada Meet call',url:d.url});return}catch(e){}}
-    try{await navigator.clipboard.writeText(d.url);b.textContent='Link copied'}catch(e){prompt('Copy this link',d.url)}
+    try{await navigator.clipboard.writeText(d.url);$('invC').textContent='Link copied'}catch(e){prompt('Copy this link',d.url)}
   };
 }
 </script></body></html>

@@ -60,3 +60,6 @@ body.room{overflow:hidden;position:fixed;inset:0;height:100%;width:100%}
 .roomwrap .topbar{flex:0 0 auto}
 .roomwrap iframe{flex:1 1 auto;min-height:0;height:100%;border:0;width:100%;display:block;background:#0b0816}
 .roomwrap .card{text-align:center}
+.modal{position:fixed;inset:0;z-index:50;background:rgba(5,3,10,.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:16px calc(16px + env(safe-area-inset-bottom))}
+.modal .card{width:100%;max-width:440px;text-align:left;background:#120c22}
+@media(min-width:600px){.modal{align-items:center}}

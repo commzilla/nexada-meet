@@ -172,7 +172,7 @@ function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostN
   ].join('\r\n');
 }
 
-function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description }) {
+function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now }) {
   return `<!doctype html><html><body style="margin:0;padding:0;background:#07050d;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#07050d;padding:32px 12px;">
 <tr><td align="center">
@@ -180,7 +180,7 @@ function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description })
 <tr><td style="height:4px;background:linear-gradient(90deg,#7c4dff,#c084fc);font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:32px 36px 8px;"><img src="${APP_URL}/logo.png" width="44" alt="Nexada" style="display:block;border:0;"></td></tr>
 <tr><td style="padding:8px 36px 0;">
-  <p style="margin:0 0 6px;color:#a78bfa;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;">You're invited</p>
+  <p style="margin:0 0 6px;color:#a78bfa;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;">${now ? 'Join now' : "You're invited"}</p>
   <h1 style="margin:0;color:#ffffff;font-size:26px;line-height:1.25;font-weight:700;">${esc(title)}</h1>
   <p style="margin:12px 0 0;color:#b9b2cc;font-size:15px;line-height:1.6;">${esc(hostName)} invited you to a video meeting.</p>
 </td></tr>
@@ -196,10 +196,10 @@ function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description })
 <tr><td align="center" style="padding:28px 36px 8px;">
   <a href="${joinUrl}" style="display:inline-block;background:linear-gradient(135deg,#7c4dff,#a855f7);background-color:#7c4dff;color:#fff;text-decoration:none;font-weight:700;font-size:16px;padding:15px 38px;border-radius:12px;">Join meeting</a>
 </td></tr>
-<tr><td align="center" style="padding:10px 36px 0;"><p style="margin:0;color:#8f86a8;font-size:13px;">The room opens 30 minutes before the start time.</p></td></tr>
+${now ? '' : `<tr><td align="center" style="padding:10px 36px 0;"><p style="margin:0;color:#8f86a8;font-size:13px;">The room opens 30 minutes before the start time.</p></td></tr>
 <tr><td align="center" style="padding:8px 36px 0;">
   <a href="${gcalUrl}" style="color:#a78bfa;font-size:14px;text-decoration:none;">+ Add to Google Calendar</a>
-</td></tr>
+</td></tr>`}
 <tr><td style="padding:24px 36px 8px;">
   <p style="margin:0;color:#8f86a8;font-size:12px;line-height:1.6;">Or copy this link:<br><a href="${joinUrl}" style="color:#c4b5fd;word-break:break-all;">${joinUrl}</a></p>
 </td></tr>
@@ -289,27 +289,33 @@ app.delete('/api/meetings/:id', auth, async (req, res) => {
 
 app.get('/api/status', auth, (req, res) => res.json({ google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
 
+async function sendInvites({ title, startD, endD, description = '', hostName = 'Angelo Castellana', tz = 'UTC', uid, joinUrl, now = false }, attendees) {
+  const mins = Math.round((endD - startD) / 60000);
+  const whenText = now ? 'Happening now' : new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: tz }).format(startD)
+    + ` (${tz.replace('_', ' ')}) · ${mins} min`;
+  const gcalUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
+    + `&text=${encodeURIComponent(title)}&dates=${icsDate(startD)}/${icsDate(endD)}`
+    + `&details=${encodeURIComponent('Join video call: ' + joinUrl)}&location=${encodeURIComponent(joinUrl)}`;
+  const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description, now });
+  return Promise.all(attendees.map(to =>
+    sendEmail({ to, subject: now ? `Join now: ${title}` : `Invitation: ${title}`, html,
+      ics: now ? null : makeIcs({ title, start: startD, end: endD, joinUrl, description, uid, attendee: to, hostName }) })
+      .then(() => ({ to, ok: true }))
+      .catch(e => { console.error('Resend error', to, e.message); return { to, ok: false, error: e.message }; })
+  ));
+}
+const cleanEmails = list => [...new Set((Array.isArray(list) ? list : String(list || '').split(/[,;\s]+/)).map(x => String(x).trim().toLowerCase()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
+
 app.post('/api/schedule', auth, async (req, res) => {
   try {
-    const { title, start, durationMin = 30, attendees = [], description = '', hostName = 'Angelo Castellana', tz = 'UTC' } = req.body;
-    if (!title || !start || !attendees.length) return res.status(400).json({ error: 'Title, time and at least one email are required.' });
+    const { title, start, durationMin = 30, description = '', hostName = 'Angelo Castellana', tz = 'UTC' } = req.body;
+    const attendees = cleanEmails(req.body.attendees);
+    if (!title || !start || !attendees.length) return res.status(400).json({ error: 'Title, time and at least one valid email are required.' });
     const startD = new Date(start);
     const endD = new Date(startD.getTime() + durationMin * 60000);
     const joinUrl = makeLink(startD.getTime(), endD.getTime(), 0);
-    const whenText = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: tz }).format(startD)
-      + ` (${tz.replace('_', ' ')}) · ${durationMin} min`;
-    const gcalUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
-      + `&text=${encodeURIComponent(title)}&dates=${icsDate(startD)}/${icsDate(endD)}`
-      + `&details=${encodeURIComponent('Join video call: ' + joinUrl)}&location=${encodeURIComponent(joinUrl)}`;
     const uid = Date.now() + '-' + Math.random().toString(36).slice(2);
-    const icsFor = to => makeIcs({ title, start: startD, end: endD, joinUrl, description, uid, attendee: to, hostName });
-    const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description });
-
-    const results = await Promise.all(attendees.map(to =>
-      sendEmail({ to, subject: `Invitation: ${title}`, html, ics: icsFor(to) })
-        .then(() => ({ to, ok: true }))
-        .catch(e => { console.error('Resend error', to, e.message); return { to, ok: false, error: e.message }; })
-    ));
+    const results = await sendInvites({ title, startD, endD, description, hostName, tz, uid, joinUrl }, attendees);
     let calendarLink = null, calendarError = null, googleEventId = null;
     if (googleConnected()) {
       try {
@@ -318,9 +324,46 @@ app.post('/api/schedule', auth, async (req, res) => {
       } catch (e) { calendarError = e.message; }
     }
     const saved = readMeetings();
-    saved.push({ id: crypto.randomUUID(), title, start: startD.toISOString(), end: endD.toISOString(), attendees, description, hostName, tz, joinUrl, googleEventId });
+    saved.push({ id: crypto.randomUUID(), uid, title, start: startD.toISOString(), end: endD.toISOString(), attendees, description, hostName, tz, joinUrl, googleEventId });
     writeMeetings(saved.slice(-200));
     res.json({ results, calendarLink, calendarError, joinUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add guests to a scheduled meeting: they get the same invite email
+app.post('/api/meetings/:id/guests', auth, async (req, res) => {
+  try {
+    const { list } = await allMeetings();
+    const m = list.find(x => x.id === req.params.id);
+    if (!m) return res.status(404).json({ error: 'Meeting not found' });
+    const emails = cleanEmails(req.body.emails).filter(e => !(m.attendees || []).includes(e));
+    if (!emails.length) return res.status(400).json({ error: 'Enter at least one new valid email.' });
+    const results = await sendInvites({ title: m.title, startD: new Date(m.start), endD: new Date(m.end), description: m.description, hostName: m.hostName || 'Angelo Castellana', tz: m.tz || 'UTC', uid: m.uid || m.id, joinUrl: m.joinUrl }, emails);
+    const all = [...(m.attendees || []), ...emails];
+    if (m.googleEventId && googleConnected()) {
+      try {
+        const c = oauth(); c.setCredentials(googleTokens());
+        await google.calendar({ version: 'v3', auth: c }).events.patch({ calendarId: 'primary', eventId: m.googleEventId, sendUpdates: 'none', requestBody: { attendees: all.map(email => ({ email })) } });
+      } catch (e) { console.error('Google patch', e.message); }
+    }
+    const saved = readMeetings();
+    const local = saved.find(x => x.id === m.id || (m.googleEventId && x.googleEventId === m.googleEventId));
+    if (local) local.attendees = all; else saved.push({ ...m, attendees: all });
+    writeMeetings(saved.slice(-200));
+    res.json({ results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Host invites people by email from inside a call
+app.post('/api/invite', async (req, res) => {
+  try {
+    const link = verifyLink(req.query);
+    if (!link || !link.o) return res.status(403).json({ error: 'forbidden' });
+    const emails = cleanEmails(req.body.emails);
+    if (!emails.length) return res.status(400).json({ error: 'Enter at least one valid email.' });
+    const hostName = process.env.HOST_NAME || 'Angelo Castellana';
+    const results = await sendInvites({ title: `Video call with ${hostName}`, startD: new Date(), endD: new Date(link.e * 1000), hostName, joinUrl: makeLink(link.s * 1000, link.e * 1000, 0), now: true }, emails);
+    res.json({ results });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
