@@ -121,8 +121,8 @@ async function listGoogleMeetings() {
   c.setCredentials(googleTokens());
   const cal = google.calendar({ version: 'v3', auth: c });
   const r = await cal.events.list({
-    calendarId: 'primary', singleEvents: true, orderBy: 'startTime', maxResults: 100,
-    timeMin: new Date(Date.now() - 6 * 3600e3).toISOString(),
+    calendarId: 'primary', singleEvents: true, orderBy: 'startTime', maxResults: 500,
+    timeMin: new Date(Date.now() - 365 * 864e5).toISOString(),
     privateExtendedProperty: 'nexadaMeet=1'
   });
   return (r.data.items || []).filter(e => e.status !== 'cancelled').map(e => ({
@@ -137,10 +137,10 @@ async function allMeetings() {
   let g = [], gErr = null;
   if (googleConnected()) { try { g = await listGoogleMeetings(); } catch (e) { gErr = e.message; } }
   const gids = new Set(g.map(m => m.googleEventId));
-  const cutoff = Date.now() - 6 * 3600e3;
-  const local = readMeetings().filter(m => new Date(m.end).getTime() > cutoff && !(m.googleEventId && gids.has(m.googleEventId)));
+  const local = readMeetings().filter(m => !(m.googleEventId && gids.has(m.googleEventId)));
   // Local entries that Google also has: keep Google's version (richer, survives restarts)
-  const list = [...g, ...local].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const list = [...g, ...local].sort((a, b) => new Date(a.start) - new Date(b.start))
+    .map(m => ({ ...m, hostUrl: makeLink(new Date(m.start).getTime(), new Date(m.end).getTime(), 1) }));
   return { list, gErr };
 }
 
@@ -249,7 +249,12 @@ app.get('/api/room', async (req, res) => {
 let instant = null;
 app.get('/api/instant', auth, (req, res) => {
   const now = Date.now();
-  if (req.query.new === '1' || !instant || instant.end - now < 30 * 60 * 1000) instant = { start: now, end: now + 4 * 3600 * 1000 };
+  if (req.query.new === '1' || !instant || instant.end - now < 30 * 60 * 1000) {
+    instant = { start: now, end: now + 4 * 3600 * 1000, id: crypto.randomUUID() };
+    const saved = readMeetings();
+    saved.push({ id: instant.id, instant: true, title: 'Instant meeting', start: new Date(instant.start).toISOString(), end: new Date(instant.end).toISOString(), attendees: [], description: '', hostName: process.env.HOST_NAME || 'Angelo Castellana', tz: req.query.tz || 'UTC', joinUrl: makeLink(instant.start, instant.end, 0) });
+    writeMeetings(saved.slice(-2000));
+  }
   res.json({ hostUrl: makeLink(instant.start, instant.end, 1), guestUrl: makeLink(instant.start, instant.end, 0) });
 });
 
@@ -325,7 +330,7 @@ app.post('/api/schedule', auth, async (req, res) => {
     }
     const saved = readMeetings();
     saved.push({ id: crypto.randomUUID(), uid, title, start: startD.toISOString(), end: endD.toISOString(), attendees, description, hostName, tz, joinUrl, googleEventId });
-    writeMeetings(saved.slice(-200));
+    writeMeetings(saved.slice(-2000));
     res.json({ results, calendarLink, calendarError, joinUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -349,7 +354,7 @@ app.post('/api/meetings/:id/guests', auth, async (req, res) => {
     const saved = readMeetings();
     const local = saved.find(x => x.id === m.id || (m.googleEventId && x.googleEventId === m.googleEventId));
     if (local) local.attendees = all; else saved.push({ ...m, attendees: all });
-    writeMeetings(saved.slice(-200));
+    writeMeetings(saved.slice(-2000));
     res.json({ results });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -362,7 +367,10 @@ app.post('/api/invite', async (req, res) => {
     const emails = cleanEmails(req.body.emails);
     if (!emails.length) return res.status(400).json({ error: 'Enter at least one valid email.' });
     const hostName = process.env.HOST_NAME || 'Angelo Castellana';
-    const results = await sendInvites({ title: `Video call with ${hostName}`, startD: new Date(), endD: new Date(link.e * 1000), hostName, joinUrl: makeLink(link.s * 1000, link.e * 1000, 0), now: true }, emails);
+    const saved = readMeetings();
+    const rec = saved.find(x => Math.floor(new Date(x.start).getTime() / 1000) === link.s && Math.floor(new Date(x.end).getTime() / 1000) === link.e);
+    if (rec) { rec.attendees = [...new Set([...(rec.attendees || []), ...emails])]; writeMeetings(saved); }
+    const results = await sendInvites({ title: rec && !rec.instant ? rec.title : `Video call with ${hostName}`, startD: new Date(), endD: new Date(link.e * 1000), hostName, joinUrl: makeLink(link.s * 1000, link.e * 1000, 0), now: true }, emails);
     res.json({ results });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
