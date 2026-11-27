@@ -20,6 +20,11 @@
   <div class="row"><button class="btn" id="go">Send invites</button></div>
   <div id="out"></div>
  </form>
+</div>
+<div class="card" style="margin-top:18px">
+  <div class="row" style="margin:0 0 6px;justify-content:space-between"><h2 style="margin:0">Upcoming meetings</h2><button class="btn ghost" id="refresh" style="padding:8px 14px;font-size:13px">Refresh</button></div>
+  <p class="sub">Scheduled meetings with guests and links. The room opens 30 minutes before each start.</p>
+  <div id="list"><p class="sub">Loading...</p></div>
 </div></div>
 <script>
 const $=id=>document.getElementById(id);
@@ -49,6 +54,46 @@ fetch('/api/status').then(r=>r.json()).then(s=>{
   $('gstat').className='pill'+(s.google?' ok':'');
   if(!s.google) $('gbox').innerHTML=s.googleConfigured?'<a class="btn ghost" href="/auth/google">Connect Google Calendar</a>':'<p class="sub">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google Calendar sync. Emails still include an Add to Calendar link.</p>';
 });
+const tzName=Intl.DateTimeFormat().resolvedOptions().timeZone;
+function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
+async function loadList(){
+  const box=$('list');
+  try{
+    const d=await (await fetch('/api/meetings')).json();
+    box.innerHTML='';
+    if(d.gErr) box.appendChild(el('div','msg','Google Calendar could not be read: '+d.gErr));
+    if(!d.list||!d.list.length){box.appendChild(el('p','sub','No upcoming meetings yet.'));return}
+    d.list.forEach(m=>{
+      const st=new Date(m.start),en=new Date(m.end),now=Date.now();
+      const opens=new Date(st.getTime()-30*60000);
+      const fmtD=x=>x.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+      const fmtT=x=>x.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const status=now>en?'Ended':now>=st?'Live now':now>=opens?'Room open':'Scheduled';
+      const c=el('div','card');c.style.cssText='background:#17112a;margin-top:12px;padding:18px';
+      const top=el('div','row');top.style.cssText='margin:0 0 6px;justify-content:space-between';
+      top.appendChild(el('h2',null,m.title));
+      top.appendChild(el('span','pill'+(status==='Scheduled'?'':' ok'),status));
+      c.appendChild(top);
+      c.appendChild(el('p','sub',fmtD(st)+', '+fmtT(st)+' to '+fmtT(en)+' ('+Math.round((en-st)/60000)+' min) '+tzName.replace(/_/g,' ')));
+      c.appendChild(el('p','sub','Room opens '+fmtT(opens)+' (30 min before)'+(m.hostName?' · Host: '+m.hostName:'')));
+      if(m.attendees&&m.attendees.length){const g=el('div','row');g.style.margin='8px 0 0';g.appendChild(el('span','sub','Guests:'));m.attendees.forEach(a=>g.appendChild(el('span','pill',a)));c.appendChild(g)}
+      if(m.description){const n=el('p','sub','Notes: '+m.description);n.style.marginTop='8px';c.appendChild(n)}
+      const r=el('div','row');
+      const cp=el('button','btn ghost','Copy link');cp.style.cssText='padding:8px 14px;font-size:13px';
+      cp.onclick=async()=>{try{await navigator.clipboard.writeText(m.joinUrl);cp.textContent='Copied'}catch(e){prompt('Copy this link',m.joinUrl)}};
+      const cn=el('button','btn ghost','Cancel meeting');cn.style.cssText='padding:8px 14px;font-size:13px;color:#f87171';
+      cn.onclick=async()=>{
+        if(!confirm('Cancel "'+m.title+'" and email the guests?'))return;
+        cn.disabled=true;cn.textContent='Cancelling...';
+        const x=await fetch('/api/meetings/'+encodeURIComponent(m.id),{method:'DELETE'});
+        if(!x.ok){cn.textContent='Failed';cn.disabled=false;return}
+        loadList();
+      };
+      r.appendChild(cp);r.appendChild(cn);c.appendChild(r);box.appendChild(c);
+    });
+  }catch(e){box.textContent='Could not load meetings.'}
+}
+$('refresh').onclick=loadList;loadList();
 $('form').onsubmit=async e=>{
   e.preventDefault(); $('go').disabled=true; $('out').innerHTML='';
   const body={title:$('title').value,start:zonedToUtc($('start').value,$('tz').value).toISOString(),durationMin:+$('dur').value,
@@ -62,6 +107,6 @@ $('form').onsubmit=async e=>{
     if(d.calendarError) t+='\nGoogle Calendar error: '+d.calendarError;
     $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent=t;
   }catch(err){ $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent='Error: '+err.message }
-  $('go').disabled=false;
+  $('go').disabled=false;loadList();
 };
 </script></body></html>

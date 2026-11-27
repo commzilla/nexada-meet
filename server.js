@@ -91,7 +91,7 @@ app.get('/auth/google/callback', auth, async (req, res) => {
   } catch (e) { res.status(500).send('Google error: ' + e.message); }
 });
 
-async function addToGoogle({ title, start, end, attendees, joinUrl, description }) {
+async function addToGoogle({ title, start, end, attendees, joinUrl, description, hostName }) {
   const c = oauth();
   c.setCredentials(googleTokens());
   const cal = google.calendar({ version: 'v3', auth: c });
@@ -104,10 +104,56 @@ async function addToGoogle({ title, start, end, attendees, joinUrl, description 
       location: joinUrl,
       start: { dateTime: start }, end: { dateTime: end },
       attendees: attendees.map(email => ({ email })),
-      source: { title: 'Nexada Meet', url: joinUrl }
+      source: { title: 'Nexada Meet', url: joinUrl },
+      extendedProperties: { private: { nexadaMeet: '1', hostName: hostName || '' } }
     }
   });
-  return r.data.htmlLink;
+  return r.data;
+}
+
+/* ---------- meeting store (file) + Google merge ---------- */
+const MEET_FILE = path.join(DATA_DIR, 'meetings.json');
+const readMeetings = () => { try { return JSON.parse(fs.readFileSync(MEET_FILE, 'utf8')); } catch { return []; } };
+const writeMeetings = list => fs.writeFileSync(MEET_FILE, JSON.stringify(list, null, 1));
+
+async function listGoogleMeetings() {
+  const c = oauth();
+  c.setCredentials(googleTokens());
+  const cal = google.calendar({ version: 'v3', auth: c });
+  const r = await cal.events.list({
+    calendarId: 'primary', singleEvents: true, orderBy: 'startTime', maxResults: 100,
+    timeMin: new Date(Date.now() - 6 * 3600e3).toISOString(),
+    privateExtendedProperty: 'nexadaMeet=1'
+  });
+  return (r.data.items || []).filter(e => e.status !== 'cancelled').map(e => ({
+    id: e.id, googleEventId: e.id, title: e.summary || '(no title)',
+    start: e.start?.dateTime, end: e.end?.dateTime,
+    attendees: (e.attendees || []).map(a => a.email),
+    description: (e.description || '').replace(/\n*Join video call:[\s\S]*$/, '').trim(),
+    joinUrl: e.location || '', hostName: e.extendedProperties?.private?.hostName || ''
+  }));
+}
+async function allMeetings() {
+  let g = [], gErr = null;
+  if (googleConnected()) { try { g = await listGoogleMeetings(); } catch (e) { gErr = e.message; } }
+  const gids = new Set(g.map(m => m.googleEventId));
+  const cutoff = Date.now() - 6 * 3600e3;
+  const local = readMeetings().filter(m => new Date(m.end).getTime() > cutoff && !(m.googleEventId && gids.has(m.googleEventId)));
+  // Local entries that Google also has: keep Google's version (richer, survives restarts)
+  const list = [...g, ...local].sort((a, b) => new Date(a.start) - new Date(b.start));
+  return { list, gErr };
+}
+
+function cancelHtml({ title, whenText, hostName }) {
+  return `<!doctype html><html><body style="margin:0;background:#07050d;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#07050d;padding:32px 12px;"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#0f0b1a;border:1px solid #2a1f47;border-radius:20px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;">
+<tr><td style="height:4px;background:linear-gradient(90deg,#7c4dff,#c084fc);font-size:0;">&nbsp;</td></tr>
+<tr><td style="padding:32px 36px 8px;"><img src="${APP_URL}/logo.png" width="44" alt="Nexada" style="display:block;"></td></tr>
+<tr><td style="padding:8px 36px 30px;"><p style="margin:0 0 6px;color:#f87171;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;">Meeting cancelled</p>
+<h1 style="margin:0;color:#fff;font-size:24px;">${esc(title)}</h1>
+<p style="margin:12px 0 0;color:#b9b2cc;font-size:15px;line-height:1.6;">${esc(hostName || 'The host')} cancelled this meeting.<br>It was scheduled for ${esc(whenText)}. The old link no longer needs to be used.</p>
+<p style="margin:24px 0 0;color:#6f6688;font-size:12px;">Nexada Meet &middot; <a href="https://nexada.co" style="color:#8f86a8;">nexada.co</a></p></td></tr>
+</table></td></tr></table></body></html>`;
 }
 
 /* ---------- ICS + email ---------- */
@@ -195,6 +241,33 @@ app.get('/api/instant', auth, (req, res) => {
   res.json({ hostUrl: makeLink(now, end, 1), guestUrl: makeLink(now, end, 0) });
 });
 
+app.get('/api/meetings', auth, async (req, res) => {
+  try { res.json(await allMeetings()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/meetings/:id', auth, async (req, res) => {
+  try {
+    const { list } = await allMeetings();
+    const m = list.find(x => x.id === req.params.id);
+    if (!m) return res.status(404).json({ error: 'Meeting not found' });
+    if (m.googleEventId && googleConnected()) {
+      try {
+        const c = oauth(); c.setCredentials(googleTokens());
+        await google.calendar({ version: 'v3', auth: c }).events.delete({ calendarId: 'primary', eventId: m.googleEventId, sendUpdates: 'none' });
+      } catch (e) { /* already gone */ }
+    }
+    writeMeetings(readMeetings().filter(x => x.id !== m.id && x.googleEventId !== m.googleEventId));
+    const whenText = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: m.tz || 'UTC' }).format(new Date(m.start)) + ` (${(m.tz || 'UTC').replace('_', ' ')})`;
+    const html = cancelHtml({ title: m.title, whenText, hostName: m.hostName });
+    const results = [];
+    for (const to of m.attendees || []) {
+      try { await sendEmail({ to, subject: `Cancelled: ${m.title}`, html }); results.push({ to, ok: true }); }
+      catch (e) { results.push({ to, ok: false, error: e.message }); }
+    }
+    res.json({ ok: true, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/status', auth, (req, res) => res.json({ google: googleConnected(), googleConfigured: !!process.env.GOOGLE_CLIENT_ID }));
 
 app.post('/api/schedule', auth, async (req, res) => {
@@ -217,11 +290,16 @@ app.post('/api/schedule', auth, async (req, res) => {
       try { await sendEmail({ to, subject: `Invitation: ${title}`, html, ics }); results.push({ to, ok: true }); }
       catch (e) { results.push({ to, ok: false, error: e.message }); }
     }
-    let calendarLink = null, calendarError = null;
+    let calendarLink = null, calendarError = null, googleEventId = null;
     if (googleConnected()) {
-      try { calendarLink = await addToGoogle({ title, start: startD.toISOString(), end: endD.toISOString(), attendees, joinUrl, description }); }
-      catch (e) { calendarError = e.message; }
+      try {
+        const ev = await addToGoogle({ title, start: startD.toISOString(), end: endD.toISOString(), attendees, joinUrl, description, hostName });
+        calendarLink = ev.htmlLink; googleEventId = ev.id;
+      } catch (e) { calendarError = e.message; }
     }
+    const saved = readMeetings();
+    saved.push({ id: crypto.randomUUID(), title, start: startD.toISOString(), end: endD.toISOString(), attendees, description, hostName, tz, joinUrl, googleEventId });
+    writeMeetings(saved.slice(-200));
     res.json({ results, calendarLink, calendarError, joinUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
