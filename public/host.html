@@ -12,6 +12,7 @@
   <h2>Schedule and invite</h2><p class="sub">Sends a designed email from meet@nexada.co with a calendar invite.</p>
   <label>Title</label><input id="title" required placeholder="Project kickoff">
   <label>Date and time</label><input id="start" type="datetime-local" required>
+  <label>Timezone</label><select id="tz"></select>
   <label>Duration</label><select id="dur"><option>15</option><option selected>30</option><option>45</option><option>60</option><option>90</option></select>
   <label>Guest emails (comma separated)</label><input id="att" required placeholder="john@company.com, anna@company.com">
   <label>Your name</label><input id="host" value="Nexada">
@@ -22,6 +23,25 @@
 </div></div>
 <script>
 const $=id=>document.getElementById(id);
+(function(){
+  const local=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const common=['Asia/Dubai','Europe/Rome','Europe/London','Europe/Paris','America/New_York','America/Chicago','America/Los_Angeles','Asia/Riyadh','Asia/Kolkata','Asia/Singapore','Australia/Sydney','UTC'];
+  let all=[];try{all=Intl.supportedValuesOf('timeZone')}catch(e){}
+  const list=[...new Set([local,...common,...all])];
+  $('tz').innerHTML=list.map(z=>`<option value="${z}">${z.replace(/_/g,' ')}</option>`).join('');
+  $('tz').value=local;
+})();
+function offsetMs(ms,tz){
+  const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(new Date(ms)).map(x=>[x.type,x.value]));
+  return Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute,p.second)-Math.floor(ms/1000)*1000;
+}
+function zonedToUtc(str,tz){
+  const [d,t]=str.split('T');const [y,mo,da]=d.split('-').map(Number);const [h,mi]=t.split(':').map(Number);
+  const guess=Date.UTC(y,mo-1,da,h,mi);
+  let ms=guess-offsetMs(guess,tz);
+  ms=guess-offsetMs(ms,tz);
+  return new Date(ms);
+}
 $('copy').onclick=()=>{navigator.clipboard.writeText(location.origin+'/room');$('copy').textContent='Copied'};
 fetch('/api/status').then(r=>r.json()).then(s=>{
   $('gstat').textContent='Google Calendar: '+(s.google?'connected':'not connected');
@@ -30,9 +50,9 @@ fetch('/api/status').then(r=>r.json()).then(s=>{
 });
 $('form').onsubmit=async e=>{
   e.preventDefault(); $('go').disabled=true; $('out').innerHTML='';
-  const body={title:$('title').value,start:new Date($('start').value).toISOString(),durationMin:+$('dur').value,
+  const body={title:$('title').value,start:zonedToUtc($('start').value,$('tz').value).toISOString(),durationMin:+$('dur').value,
     attendees:$('att').value.split(/[,;\s]+/).filter(Boolean),hostName:$('host').value,description:$('desc').value,
-    tz:Intl.DateTimeFormat().resolvedOptions().timeZone};
+    tz:$('tz').value};
   try{
     const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json(); if(!r.ok) throw new Error(d.error);

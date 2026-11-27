@@ -31,3 +31,5 @@ h2{margin:0 0 4px;font-size:20px}
 .roomwrap header .brand{display:flex;align-items:center;gap:10px;font-weight:700}
 .roomwrap header img{height:26px}
 .roomwrap iframe{flex:1;border:0;width:100%}
+
+input[type=datetime-local]{min-height:46px;text-align:left;-webkit-appearance:none;appearance:none;display:block}
