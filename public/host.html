@@ -1,31 +1,43 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Host | Nexada Meet</title><link rel="icon" href="/logo.png"><link rel="stylesheet" href="/style.css"></head>
-<body><div class="wrap">
-<nav><div class="brand"><img src="/logo.png" alt=""> Nexada Meet</div><span id="gstat" class="pill">Google Calendar: checking...</span></nav>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Host | Nexada Meet</title><link rel="icon" href="/logo.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"><meta name="theme-color" content="#07050d"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="glow"></div>
+<header class="topbar"><div class="topbar-in">
+  <a href="/" class="brand"><img src="/logo.png" alt=""><span>Nexada <b>Meet</b></span></a>
+  <span id="gstat" class="pill">Google Calendar: checking...</span>
+</div></header>
+<main class="wrap">
+<div class="pagehead"><h1>Dashboard</h1><p class="sub">Start a call now or schedule one and invite your guests.</p></div>
 <div class="grid">
- <div class="card">
-  <h2>Start now</h2><p class="sub">Opens the room right now. Share the guest link with anyone you want to join (valid 4 hours).</p>
-  <div class="row"><button class="btn" id="startNow">Start meeting</button><button class="btn ghost" id="copy">Copy guest link</button></div>
-  <div id="gbox" style="margin-top:22px"></div>
+ <div class="col">
+  <div class="card card-accent">
+   <div class="icon">&#9654;</div>
+   <h2>Start now</h2><p class="sub">Open the room right now and share the guest link. It stays valid for 4 hours.</p>
+   <div class="row"><button class="btn" id="startNow">Start meeting</button><button class="btn ghost" id="copy">Copy guest link</button></div>
+   <div id="gbox"></div>
+  </div>
+  <div class="card">
+   <div class="row between" style="margin:0 0 4px"><h2 style="margin:0">Upcoming meetings</h2><button class="btn ghost sm" id="refresh">Refresh</button></div>
+   <p class="sub">The room opens 30 minutes before each start.</p>
+   <div id="list"><p class="sub">Loading...</p></div>
+  </div>
  </div>
  <form class="card" id="form">
-  <h2>Schedule and invite</h2><p class="sub">Sends a designed email from meet@nexada.co with a calendar invite.</p>
-  <label>Title</label><input id="title" required placeholder="Project kickoff">
-  <label>Date and time</label><input id="start" type="datetime-local" required>
-  <label>Timezone</label><select id="tz"></select>
-  <label>Duration</label><select id="dur"><option>15</option><option selected>30</option><option>45</option><option>60</option><option>90</option></select>
-  <label>Guest emails (comma separated)</label><input id="att" required placeholder="john@company.com, anna@company.com">
-  <label>Your name</label><input id="host" value="Nexada">
-  <label>Notes (optional)</label><textarea id="desc" rows="3"></textarea>
-  <div class="row"><button class="btn" id="go">Send invites</button></div>
+  <div class="icon">&#128197;</div>
+  <h2>Schedule and invite</h2><p class="sub">Guests get a branded email from meet@nexada.co with a calendar invite.</p>
+  <label for="title">Title</label><input id="title" required placeholder="Project kickoff">
+  <div class="two">
+   <div><label for="start">Date and time</label><input id="start" type="datetime-local" required></div>
+   <div><label for="dur">Duration (min)</label><select id="dur"><option>15</option><option selected>30</option><option>45</option><option>60</option><option>90</option></select></div>
+  </div>
+  <label for="tz">Timezone</label><select id="tz"></select>
+  <label for="att">Guest emails</label><input id="att" required inputmode="email" autocapitalize="off" placeholder="john@company.com, anna@company.com">
+  <label for="host">Your name</label><input id="host" value="Nexada">
+  <label for="desc">Notes (optional)</label><textarea id="desc" rows="3" placeholder="Agenda, links, anything guests should know"></textarea>
+  <button class="btn block" id="go">Send invites</button>
   <div id="out"></div>
  </form>
 </div>
-<div class="card" style="margin-top:18px">
-  <div class="row" style="margin:0 0 6px;justify-content:space-between"><h2 style="margin:0">Upcoming meetings</h2><button class="btn ghost" id="refresh" style="padding:8px 14px;font-size:13px">Refresh</button></div>
-  <p class="sub">Scheduled meetings with guests and links. The room opens 30 minutes before each start.</p>
-  <div id="list"><p class="sub">Loading...</p></div>
-</div></div>
+</main>
 <script>
 const $=id=>document.getElementById(id);
 (function(){
@@ -54,7 +66,7 @@ $('copy').onclick=async()=>{const d=await (await fetch('/api/instant')).json();t
 fetch('/api/status').then(r=>r.json()).then(s=>{
   $('gstat').textContent='Google Calendar: '+(s.google?'connected':'not connected');
   $('gstat').className='pill'+(s.google?' ok':'');
-  if(!s.google) $('gbox').innerHTML=s.googleConfigured?'<a class="btn ghost" href="/auth/google">Connect Google Calendar</a>':'<p class="sub">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google Calendar sync. Emails still include an Add to Calendar link.</p>';
+  if(!s.google) $('gbox').innerHTML=s.googleConfigured?'<a class="btn ghost sm" href="/auth/google" style="margin-top:18px">Connect Google Calendar</a>':'<p class="sub hint">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google Calendar sync. Emails still include an Add to Calendar link.</p>';
 });
 const tzName=Intl.DateTimeFormat().resolvedOptions().timeZone;
 function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
@@ -71,9 +83,9 @@ async function loadList(){
       const fmtD=x=>x.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long',year:'numeric'});
       const fmtT=x=>x.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
       const status=now>en?'Ended':now>=st?'Live now':now>=opens?'Room open':'Scheduled';
-      const c=el('div','card');c.style.cssText='background:#17112a;margin-top:12px;padding:18px';
-      const top=el('div','row');top.style.cssText='margin:0 0 6px;justify-content:space-between';
-      top.appendChild(el('h2',null,m.title));
+      const c=el('div','meet');
+      const top=el('div','row');top.classList.add('between');top.style.margin='0 0 6px';
+      top.appendChild(el('h3',null,m.title));
       top.appendChild(el('span','pill'+(status==='Scheduled'?'':' ok'),status));
       c.appendChild(top);
       c.appendChild(el('p','sub',fmtD(st)+', '+fmtT(st)+' to '+fmtT(en)+' ('+Math.round((en-st)/60000)+' min) '+tzName.replace(/_/g,' ')));
@@ -81,9 +93,9 @@ async function loadList(){
       if(m.attendees&&m.attendees.length){const g=el('div','row');g.style.margin='8px 0 0';g.appendChild(el('span','sub','Guests:'));m.attendees.forEach(a=>g.appendChild(el('span','pill',a)));c.appendChild(g)}
       if(m.description){const n=el('p','sub','Notes: '+m.description);n.style.marginTop='8px';c.appendChild(n)}
       const r=el('div','row');
-      const cp=el('button','btn ghost','Copy link');cp.style.cssText='padding:8px 14px;font-size:13px';
+      const cp=el('button','btn ghost','Copy link');cp.classList.add('sm');
       cp.onclick=async()=>{try{await navigator.clipboard.writeText(m.joinUrl);cp.textContent='Copied'}catch(e){prompt('Copy this link',m.joinUrl)}};
-      const cn=el('button','btn ghost','Cancel meeting');cn.style.cssText='padding:8px 14px;font-size:13px;color:#f87171';
+      const cn=el('button','btn ghost','Cancel meeting');cn.classList.add('sm','danger');
       cn.onclick=async()=>{
         if(!confirm('Cancel "'+m.title+'" and email the guests?'))return;
         cn.disabled=true;cn.textContent='Cancelling...';
