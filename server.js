@@ -153,7 +153,16 @@ async function sendEmail({ to, subject, html, ics }) {
 
 /* ---------- API ---------- */
 app.get('/api/room', async (req, res) => {
-  try { res.json({ url: await getRoomUrl() }); }
+  try {
+    const url = await getRoomUrl();
+    // A meeting token lets people in even when the Daily room is private
+    const roomName = new URL(url).pathname.replace(/^\//, '');
+    const tk = await daily('/meeting-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ properties: { room_name: roomName, exp: Math.floor(Date.now() / 1000) + 6 * 3600 } })
+    });
+    res.json({ url: `${url}?t=${tk.token}` });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
