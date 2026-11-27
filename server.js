@@ -245,9 +245,19 @@ app.get('/api/room', async (req, res) => {
 });
 
 // Instant meeting for the host: owner link + guest link, valid 4 hours
+// Reuse the same instant session for 4h so host and guests land in the same room
+let instant = null;
 app.get('/api/instant', auth, (req, res) => {
-  const now = Date.now(), end = now + 4 * 3600 * 1000;
-  res.json({ hostUrl: makeLink(now, end, 1), guestUrl: makeLink(now, end, 0) });
+  const now = Date.now();
+  if (req.query.new === '1' || !instant || instant.end - now < 30 * 60 * 1000) instant = { start: now, end: now + 4 * 3600 * 1000 };
+  res.json({ hostUrl: makeLink(instant.start, instant.end, 1), guestUrl: makeLink(instant.start, instant.end, 0) });
+});
+
+// Host (owner link) can get the guest link for the room they're in
+app.get('/api/guest-link', (req, res) => {
+  const link = verifyLink(req.query);
+  if (!link || !link.o) return res.status(403).json({ error: 'forbidden' });
+  res.json({ url: makeLink(link.s * 1000, link.e * 1000, 0) });
 });
 
 app.get('/api/meetings', auth, async (req, res) => {

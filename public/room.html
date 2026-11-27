@@ -3,7 +3,7 @@
 <body class="room"><div class="roomwrap">
 <header class="topbar"><div class="topbar-in">
   <a class="brand"><img src="/logo.png" alt=""><span>Nexada <b>Meet</b></span></a>
-  <a href="javascript:history.length>1?history.back():window.close()" class="btn ghost sm">Leave</a>
+  <div class="row" style="margin:0;gap:8px"><button id="invite" class="btn sm" style="display:none">Invite</button><a href="javascript:history.length>1?history.back():window.close()" class="btn ghost sm">Leave</a></div>
 </div></header>
 <iframe id="f" allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write" title="Meeting"></iframe>
 </div>
@@ -27,4 +27,12 @@ async function load(){
   } else msg('<h2>'+(r.status===410?'Meeting ended':'Cannot join')+'</h2><p class="sub">'+(d.message||d.error||'Please use the link from your invitation.')+'</p>');
 }
 load();
+if(new URLSearchParams(location.search).get('o')==='1'){
+  const b=document.getElementById('invite');b.style.display='';
+  b.onclick=async()=>{
+    const d=await (await fetch('/api/guest-link'+location.search)).json();
+    if(navigator.share){try{await navigator.share({title:'Join my Nexada Meet call',url:d.url});return}catch(e){}}
+    try{await navigator.clipboard.writeText(d.url);b.textContent='Link copied'}catch(e){prompt('Copy this link',d.url)}
+  };
+}
 </script></body></html>
