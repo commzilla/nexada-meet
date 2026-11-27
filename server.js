@@ -158,12 +158,16 @@ function cancelHtml({ title, whenText, hostName }) {
 
 /* ---------- ICS + email ---------- */
 const icsDate = d => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-function makeIcs({ title, start, end, joinUrl, description, uid }) {
+function makeIcs({ title, start, end, joinUrl, description, uid, attendee, hostName }) {
+  const org = process.env.ORGANIZER_EMAIL || 'angelo@nexada.co';
   const fold = s => s.replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
   return [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nexada//Meet//EN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
     `UID:${uid}@nexada.co`, `DTSTAMP:${icsDate(new Date())}`, `DTSTART:${icsDate(start)}`, `DTEND:${icsDate(end)}`,
     `SUMMARY:${fold(title)}`, `DESCRIPTION:${fold((description ? description + '\n\n' : '') + 'Join: ' + joinUrl)}`,
+    `ORGANIZER;CN=${fold(hostName || 'Nexada')}:mailto:${org}`,
+    ...(attendee ? [`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${attendee}`] : []),
+    'SEQUENCE:0', 'STATUS:CONFIRMED',
     `LOCATION:${fold(joinUrl)}`, `URL:${joinUrl}`, 'END:VEVENT', 'END:VCALENDAR'
   ].join('\r\n');
 }
@@ -206,8 +210,8 @@ function emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description })
 }
 
 async function sendEmail({ to, subject, html, ics }) {
-  const body = { from: FROM, to: [to], subject, html };
-  if (ics) body.attachments = [{ filename: 'invite.ics', content: Buffer.from(ics).toString('base64') }];
+  const body = { from: FROM, to: [to], subject, html, reply_to: process.env.ORGANIZER_EMAIL || 'angelo@nexada.co' };
+  if (ics) body.attachments = [{ filename: 'invite.ics', content: Buffer.from(ics).toString('base64'), content_type: 'text/calendar; method=REQUEST; charset=UTF-8' }];
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST', signal: AbortSignal.timeout(15000),
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -287,11 +291,12 @@ app.post('/api/schedule', auth, async (req, res) => {
     const gcalUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
       + `&text=${encodeURIComponent(title)}&dates=${icsDate(startD)}/${icsDate(endD)}`
       + `&details=${encodeURIComponent('Join video call: ' + joinUrl)}&location=${encodeURIComponent(joinUrl)}`;
-    const ics = makeIcs({ title, start: startD, end: endD, joinUrl, description, uid: Date.now() + '-' + Math.random().toString(36).slice(2) });
+    const uid = Date.now() + '-' + Math.random().toString(36).slice(2);
+    const icsFor = to => makeIcs({ title, start: startD, end: endD, joinUrl, description, uid, attendee: to, hostName });
     const html = emailHtml({ title, whenText, hostName, joinUrl, gcalUrl, description });
 
     const results = await Promise.all(attendees.map(to =>
-      sendEmail({ to, subject: `Invitation: ${title}`, html, ics })
+      sendEmail({ to, subject: `Invitation: ${title}`, html, ics: icsFor(to) })
         .then(() => ({ to, ok: true }))
         .catch(e => { console.error('Resend error', to, e.message); return { to, ok: false, error: e.message }; })
     ));
