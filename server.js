@@ -317,6 +317,8 @@ app.post('/api/schedule', auth, async (req, res) => {
 /* ---------- pages ---------- */
 app.get('/host', auth, (req, res) => res.sendFile(path.join(__dirname, 'public/host.html')));
 app.get('/room', (req, res) => res.sendFile(path.join(__dirname, 'public/room.html')));
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
+app.get(['/', '/index.html'], (req, res) => res.status(404).type('html').send('<!doctype html><meta name="robots" content="noindex"><title></title><body style="margin:0;background:#07050d"></body>'));
+app.get('/robots.txt', (req, res) => res.type('text').send('User-agent: *\nDisallow: /'));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.listen(PORT, () => console.log(`Nexada Meet running on ${APP_URL}`));
