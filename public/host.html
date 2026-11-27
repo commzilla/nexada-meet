@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Host | Nexada Meet</title><link rel="icon" href="/logo.png"><link rel="stylesheet" href="/style.css"></head>
+<body><div class="wrap">
+<nav><div class="brand"><img src="/logo.png" alt=""> Nexada Meet</div><span id="gstat" class="pill">Google Calendar: checking...</span></nav>
+<div class="grid">
+ <div class="card">
+  <h2>Start now</h2><p class="sub">Open the room instantly and share the link.</p>
+  <div class="row"><a class="btn" href="/room" target="_blank">Start meeting</a><button class="btn ghost" id="copy">Copy link</button></div>
+  <div id="gbox" style="margin-top:22px"></div>
+ </div>
+ <form class="card" id="form">
+  <h2>Schedule and invite</h2><p class="sub">Sends a designed email from meet@nexada.co with a calendar invite.</p>
+  <label>Title</label><input id="title" required placeholder="Project kickoff">
+  <label>Date and time</label><input id="start" type="datetime-local" required>
+  <label>Duration</label><select id="dur"><option>15</option><option selected>30</option><option>45</option><option>60</option><option>90</option></select>
+  <label>Guest emails (comma separated)</label><input id="att" required placeholder="john@company.com, anna@company.com">
+  <label>Your name</label><input id="host" value="Nexada">
+  <label>Notes (optional)</label><textarea id="desc" rows="3"></textarea>
+  <div class="row"><button class="btn" id="go">Send invites</button></div>
+  <div id="out"></div>
+ </form>
+</div></div>
+<script>
+const $=id=>document.getElementById(id);
+$('copy').onclick=()=>{navigator.clipboard.writeText(location.origin+'/room');$('copy').textContent='Copied'};
+fetch('/api/status').then(r=>r.json()).then(s=>{
+  $('gstat').textContent='Google Calendar: '+(s.google?'connected':'not connected');
+  $('gstat').className='pill'+(s.google?' ok':'');
+  if(!s.google) $('gbox').innerHTML=s.googleConfigured?'<a class="btn ghost" href="/auth/google">Connect Google Calendar</a>':'<p class="sub">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google Calendar sync. Emails still include an Add to Calendar link.</p>';
+});
+$('form').onsubmit=async e=>{
+  e.preventDefault(); $('go').disabled=true; $('out').innerHTML='';
+  const body={title:$('title').value,start:new Date($('start').value).toISOString(),durationMin:+$('dur').value,
+    attendees:$('att').value.split(/[,;\s]+/).filter(Boolean),hostName:$('host').value,description:$('desc').value,
+    tz:Intl.DateTimeFormat().resolvedOptions().timeZone};
+  try{
+    const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json(); if(!r.ok) throw new Error(d.error);
+    let t=d.results.map(x=>(x.ok?'Sent to ':'Failed for ')+x.to+(x.error?': '+x.error:'')).join('\n');
+    if(d.calendarLink) t+='\nAdded to Google Calendar';
+    if(d.calendarError) t+='\nGoogle Calendar error: '+d.calendarError;
+    $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent=t;
+  }catch(err){ $('out').innerHTML='<div class="msg"></div>'; $('out').firstChild.textContent='Error: '+err.message }
+  $('go').disabled=false;
+};
+</script></body></html>
