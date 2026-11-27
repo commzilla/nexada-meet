@@ -225,11 +225,16 @@ app.get('/api/room', async (req, res) => {
     const opensAt = link.s - OPEN_BEFORE_SEC;
     if (now < opensAt) return res.status(425).json({ error: 'early', opensAt: opensAt * 1000, start: link.s * 1000 });
     if (now > link.e + GRACE_AFTER_SEC) return res.status(410).json({ error: 'ended', message: 'This meeting has ended.' });
-    const url = await getRoomUrl();
-    const roomName = new URL(url).pathname.replace(/^\//, '');
+    // One Daily room per meeting, with known settings (default room was blocking guests)
+    const roomName = 'nx-' + crypto.createHmac('sha256', SECRET).update(`room.${link.s}.${link.e}`).digest('hex').slice(0, 16);
+    const roomProps = { exp: link.e + GRACE_AFTER_SEC, enable_knocking: false, enable_prejoin_ui: true, enable_screenshare: true, enable_chat: true };
+    let room;
+    try { room = await daily('/rooms/' + roomName); }
+    catch { room = await daily('/rooms', { method: 'POST', body: JSON.stringify({ name: roomName, privacy: 'private', properties: roomProps }) }); }
+    const url = room.url;
     const tk = await daily('/meeting-tokens', {
       method: 'POST',
-      body: JSON.stringify({ properties: { room_name: roomName, is_owner: !!link.o, exp: link.e + GRACE_AFTER_SEC } })
+      body: JSON.stringify({ properties: { room_name: roomName, is_owner: !!link.o, exp: link.e + GRACE_AFTER_SEC, enable_prejoin_ui: true } })
     });
     res.json({ url: `${url}?t=${tk.token}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
